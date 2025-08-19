@@ -1,0 +1,36 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    configure)
+        # Update desktop database
+        if which update-desktop-database > /dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+        fi
+        
+        echo ""
+        echo "=============================================="
+        echo " Linux Task Manager has been installed!"
+        echo "=============================================="
+        echo ""
+        echo "You can now run it from:"
+        echo "  • Application menu under 'System Tools'"
+        echo "  • Terminal: linux-taskman"
+        echo ""
+        echo "Features:"
+        echo "  • Real-time CPU and memory monitoring"
+        echo "  • Process management"
+        echo "  • User session monitoring"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

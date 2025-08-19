@@ -1,0 +1,11 @@
+linux-taskman (1.0.0-1) stable; urgency=low
+
+  * Initial release
+  * Performance tab with CPU and memory monitoring
+  * Processes tab with user/system process separation
+  * Users tab showing logged-in users
+  * Configurable update intervals
+  * Process search and termination features
+  * Compatible with Linux Mint 22.1
+
+ -- Linux Task Manager Contributors <noreply@example.com>  Tue, 19 Aug 2025 21:00:00 +0000

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Linux Task Manager
+Comment=System monitoring and process management tool
+Exec=/usr/bin/python3 /home/jeff/linux-taskman/taskmanager.py
+Icon=utilities-system-monitor
+Terminal=false
+Type=Application
+Categories=System;Monitor;
+Keywords=system;process;cpu;memory;monitor;task;
