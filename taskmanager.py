@@ -19,6 +19,8 @@ from collections import deque
 import pwd
 import grp
 import signal
+import math
+import cairo
 
 class TaskManager(Gtk.Window):
     def __init__(self):
@@ -46,6 +48,7 @@ class TaskManager(Gtk.Window):
         # Initialize data - must be before creating tabs
         self.current_user = os.environ.get('USER', 'unknown')
         self.init_performance_data()
+        self.init_disk_data()
         self.process_list_store = None
         self.users_list_store = None
         
@@ -57,6 +60,7 @@ class TaskManager(Gtk.Window):
         self.create_performance_tab()
         self.create_processes_tab()
         self.create_users_tab()
+        self.create_disks_tab()
         
         # Status bar
         self.statusbar = Gtk.Statusbar()
@@ -150,6 +154,8 @@ class TaskManager(Gtk.Window):
         
         # Initial data load
         self.refresh_all()
+        # Also refresh disk data initially
+        self.refresh_disk_data()
         
     def create_performance_tab(self):
         """Create the Performance tab"""
@@ -393,11 +399,138 @@ class TaskManager(Gtk.Window):
         
         self.notebook.append_page(users_box, Gtk.Label(label="Users"))
         
+    def create_disks_tab(self):
+        """Create the Disks tab"""
+        # Main container
+        disks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        disks_box.set_border_width(10)
+        
+        # Disk list frame
+        list_frame = Gtk.Frame(label="Disk Drives")
+        disks_box.pack_start(list_frame, True, True, 0)
+        
+        # Horizontal paned for list and details
+        paned = Gtk.HPaned()
+        list_frame.add(paned)
+        
+        # Left side - disk list
+        list_scrolled = Gtk.ScrolledWindow()
+        list_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        list_scrolled.set_min_content_width(400)
+        
+        # Create TreeView for disks
+        self.disks_list_store = Gtk.ListStore(str, str, str, str, str, float, str)
+        self.disks_tree = Gtk.TreeView(model=self.disks_list_store)
+        
+        # Add columns
+        columns = [
+            ("Device", 0, 100),
+            ("Mount Point", 1, 150),
+            ("Type", 2, 80),
+            ("Total", 3, 100),
+            ("Used", 4, 100),
+            ("Usage %", 5, 80),
+            ("Available", 6, 100)
+        ]
+        
+        for title, index, width in columns:
+            if index == 5:  # Usage % column
+                renderer = Gtk.CellRendererProgress()
+                column = Gtk.TreeViewColumn(title, renderer, value=index)
+            else:
+                renderer = Gtk.CellRendererText()
+                column = Gtk.TreeViewColumn(title, renderer, text=index)
+            column.set_resizable(True)
+            column.set_min_width(width)
+            self.disks_tree.append_column(column)
+        
+        self.disks_tree.get_selection().connect("changed", self.on_disk_selection_changed)
+        list_scrolled.add(self.disks_tree)
+        paned.pack1(list_scrolled, resize=True, shrink=False)
+        
+        # Right side - disk details and pie chart
+        details_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        details_box.set_border_width(10)
+        
+        # Disk details frame
+        details_frame = Gtk.Frame(label="Disk Details")
+        details_box.pack_start(details_frame, False, False, 0)
+        
+        details_info_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        details_info_box.set_border_width(10)
+        details_frame.add(details_info_box)
+        
+        self.disk_device_label = Gtk.Label()
+        self.disk_device_label.set_xalign(0)
+        details_info_box.pack_start(self.disk_device_label, False, False, 0)
+        
+        self.disk_mount_label = Gtk.Label()
+        self.disk_mount_label.set_xalign(0)
+        details_info_box.pack_start(self.disk_mount_label, False, False, 0)
+        
+        self.disk_fs_label = Gtk.Label()
+        self.disk_fs_label.set_xalign(0)
+        details_info_box.pack_start(self.disk_fs_label, False, False, 0)
+        
+        self.disk_total_label = Gtk.Label()
+        self.disk_total_label.set_xalign(0)
+        details_info_box.pack_start(self.disk_total_label, False, False, 0)
+        
+        self.disk_used_label = Gtk.Label()
+        self.disk_used_label.set_xalign(0)
+        details_info_box.pack_start(self.disk_used_label, False, False, 0)
+        
+        self.disk_free_label = Gtk.Label()
+        self.disk_free_label.set_xalign(0)
+        details_info_box.pack_start(self.disk_free_label, False, False, 0)
+        
+        # Pie chart frame
+        chart_frame = Gtk.Frame(label="Disk Usage")
+        details_box.pack_start(chart_frame, True, True, 0)
+        
+        self.disk_pie_chart = Gtk.DrawingArea()
+        self.disk_pie_chart.set_size_request(300, 300)
+        self.disk_pie_chart.connect("draw", self.on_disk_pie_chart_draw)
+        chart_frame.add(self.disk_pie_chart)
+        
+        # I/O statistics frame
+        io_frame = Gtk.Frame(label="Disk I/O")
+        details_box.pack_start(io_frame, False, False, 0)
+        
+        io_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        io_box.set_border_width(10)
+        io_frame.add(io_box)
+        
+        self.disk_read_label = Gtk.Label()
+        self.disk_read_label.set_xalign(0)
+        io_box.pack_start(self.disk_read_label, False, False, 0)
+        
+        self.disk_write_label = Gtk.Label()
+        self.disk_write_label.set_xalign(0)
+        io_box.pack_start(self.disk_write_label, False, False, 0)
+        
+        self.disk_io_chart = Gtk.DrawingArea()
+        self.disk_io_chart.set_size_request(300, 150)
+        self.disk_io_chart.connect("draw", self.on_disk_io_chart_draw)
+        io_box.pack_start(self.disk_io_chart, True, True, 0)
+        
+        paned.pack2(details_box, resize=True, shrink=False)
+        paned.set_position(500)
+        
+        self.notebook.append_page(disks_box, Gtk.Label(label="Disks"))
+        
     def init_performance_data(self):
         """Initialize performance data structures"""
         self.cpu_history_points = 60
         self.cpu_history = deque([0] * self.cpu_history_points, maxlen=self.cpu_history_points)
         self.memory_history = deque([0] * self.cpu_history_points, maxlen=self.cpu_history_points)
+        
+    def init_disk_data(self):
+        """Initialize disk monitoring data structures"""
+        self.disk_stats = {}
+        self.disk_io_history = {}
+        self.selected_disk = None
+        self.last_disk_io = {}
         
     def start_update_timer(self):
         """Start the update timer"""
@@ -433,6 +566,8 @@ class TaskManager(Gtk.Window):
             self.refresh_processes()
         elif current_page == 2:  # Users tab
             self.refresh_users()
+        elif current_page == 3:  # Disks tab
+            self.refresh_disk_data()
             
         # Always update performance data for the graph
         self.update_performance_data()
@@ -779,6 +914,407 @@ class TaskManager(Gtk.Window):
         )
         dialog.run()
         dialog.destroy()
+    
+    def refresh_disk_data(self):
+        """Refresh disk utilization data"""
+        try:
+            # Remember current selection
+            current_selection = self.selected_disk
+            
+            # Clear existing data
+            self.disks_list_store.clear()
+            
+            # Get disk usage using psutil
+            partitions = psutil.disk_partitions(all=False)
+            first_device = None
+            selected_iter = None
+            row_index = 0
+            
+            for partition in partitions:
+                try:
+                    # Skip certain filesystem types
+                    if partition.fstype in ['squashfs', 'tmpfs', 'devtmpfs']:
+                        continue
+                        
+                    usage = psutil.disk_usage(partition.mountpoint)
+                    
+                    # Format sizes
+                    total_gb = usage.total / (1024**3)
+                    used_gb = usage.used / (1024**3)
+                    free_gb = usage.free / (1024**3)
+                    
+                    total_str = f"{total_gb:.1f} GB"
+                    used_str = f"{used_gb:.1f} GB"
+                    free_str = f"{free_gb:.1f} GB"
+                    
+                    # Store disk info
+                    disk_info = {
+                        'device': partition.device,
+                        'mountpoint': partition.mountpoint,
+                        'fstype': partition.fstype,
+                        'total': usage.total,
+                        'used': usage.used,
+                        'free': usage.free,
+                        'percent': usage.percent
+                    }
+                    self.disk_stats[partition.device] = disk_info
+                    
+                    # Remember first device
+                    if first_device is None:
+                        first_device = partition.device
+                    
+                    # Add to list store
+                    iter = self.disks_list_store.append([
+                        partition.device,
+                        partition.mountpoint,
+                        partition.fstype,
+                        total_str,
+                        used_str,
+                        usage.percent,
+                        free_str
+                    ])
+                    
+                    # Track which row to select
+                    if partition.device == current_selection:
+                        selected_iter = iter
+                    
+                    row_index += 1
+                    
+                except PermissionError:
+                    continue
+                    
+            # Update disk I/O stats
+            self.update_disk_io_stats()
+            
+            # Restore selection or select first disk
+            if selected_iter:
+                # Restore previous selection
+                self.disks_tree.get_selection().select_iter(selected_iter)
+                self.selected_disk = current_selection
+            elif not self.selected_disk and first_device:
+                # Auto-select first disk if none was selected before
+                self.selected_disk = first_device
+                if len(self.disks_list_store) > 0:
+                    self.disks_tree.get_selection().select_iter(self.disks_list_store.get_iter_first())
+            
+            # Update details for selected disk
+            if self.selected_disk:
+                self.update_disk_details(self.selected_disk)
+                
+        except Exception as e:
+            print(f"Error refreshing disk data: {e}")
+    
+    def update_disk_io_stats(self):
+        """Update disk I/O statistics from /proc/diskstats"""
+        try:
+            current_io = {}
+            
+            # Read /proc/diskstats
+            with open('/proc/diskstats', 'r') as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 14:
+                        device = parts[2]
+                        # Skip loop devices
+                        if device.startswith('loop'):
+                            continue
+                        
+                        reads_completed = int(parts[3])
+                        sectors_read = int(parts[5])
+                        writes_completed = int(parts[7])
+                        sectors_written = int(parts[9])
+                        
+                        current_io[device] = {
+                            'reads': reads_completed,
+                            'writes': writes_completed,
+                            'read_bytes': sectors_read * 512,
+                            'write_bytes': sectors_written * 512
+                        }
+            
+            # Calculate rates
+            for device, stats in current_io.items():
+                if device in self.last_disk_io:
+                    last = self.last_disk_io[device]
+                    # Calculate bytes per second
+                    read_bytes_diff = stats['read_bytes'] - last['read_bytes']
+                    write_bytes_diff = stats['write_bytes'] - last['write_bytes']
+                    
+                    # Avoid negative rates (can happen on counter reset)
+                    if read_bytes_diff >= 0 and write_bytes_diff >= 0:
+                        read_rate = read_bytes_diff / self.update_interval
+                        write_rate = write_bytes_diff / self.update_interval
+                        
+                        # Initialize history if needed
+                        if device not in self.disk_io_history:
+                            self.disk_io_history[device] = {
+                                'read': deque([0] * 30, maxlen=30),
+                                'write': deque([0] * 30, maxlen=30)
+                            }
+                        
+                        # Store rates in MB/s
+                        self.disk_io_history[device]['read'].append(read_rate / (1024 * 1024))
+                        self.disk_io_history[device]['write'].append(write_rate / (1024 * 1024))
+                    
+            self.last_disk_io = current_io
+            
+        except Exception as e:
+            print(f"Error updating disk I/O stats: {e}")
+    
+    def on_disk_selection_changed(self, selection):
+        """Handle disk selection change"""
+        model, treeiter = selection.get_selected()
+        if treeiter:
+            device = model[treeiter][0]
+            self.selected_disk = device
+            self.update_disk_details(device)
+    
+    def update_disk_details(self, device):
+        """Update disk details display"""
+        if device in self.disk_stats:
+            info = self.disk_stats[device]
+            
+            self.disk_device_label.set_text(f"Device: {info['device']}")
+            self.disk_mount_label.set_text(f"Mount Point: {info['mountpoint']}")
+            self.disk_fs_label.set_text(f"File System: {info['fstype']}")
+            
+            total_gb = info['total'] / (1024**3)
+            used_gb = info['used'] / (1024**3)
+            free_gb = info['free'] / (1024**3)
+            
+            self.disk_total_label.set_text(f"Total Space: {total_gb:.2f} GB")
+            self.disk_used_label.set_text(f"Used Space: {used_gb:.2f} GB ({info['percent']:.1f}%)")
+            self.disk_free_label.set_text(f"Free Space: {free_gb:.2f} GB")
+            
+            # Update I/O labels
+            # Extract device name without /dev/ prefix
+            device_name = device.replace('/dev/', '')
+            
+            # Try to find I/O stats for this device or its base device
+            io_device = None
+            if device_name in self.disk_io_history:
+                io_device = device_name
+            else:
+                # Try base device (e.g., sda for sda1)
+                base_device = ''.join([c for c in device_name if not c.isdigit()])
+                if base_device in self.disk_io_history:
+                    io_device = base_device
+            
+            if io_device and self.disk_io_history[io_device]['read']:
+                read_rate = self.disk_io_history[io_device]['read'][-1]
+                write_rate = self.disk_io_history[io_device]['write'][-1]
+                self.disk_read_label.set_text(f"Read Speed: {read_rate:.2f} MB/s")
+                self.disk_write_label.set_text(f"Write Speed: {write_rate:.2f} MB/s")
+            else:
+                self.disk_read_label.set_text("Read Speed: 0.00 MB/s")
+                self.disk_write_label.set_text("Write Speed: 0.00 MB/s")
+            
+            # Redraw charts
+            self.disk_pie_chart.queue_draw()
+            self.disk_io_chart.queue_draw()
+    
+    def on_disk_pie_chart_draw(self, widget, cr):
+        """Draw disk usage pie chart"""
+        if not self.selected_disk or self.selected_disk not in self.disk_stats:
+            # Draw empty state
+            allocation = widget.get_allocation()
+            width = allocation.width
+            height = allocation.height
+            
+            if width <= 0 or height <= 0:
+                return False
+            
+            # Background
+            cr.set_source_rgb(1.0, 1.0, 1.0)
+            cr.rectangle(0, 0, width, height)
+            cr.fill()
+            
+            # Message
+            cr.set_source_rgb(0.5, 0.5, 0.5)
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+            cr.set_font_size(12)
+            cr.move_to(width/2 - 50, height/2)
+            cr.show_text("Select a disk to view")
+            
+            return False
+            
+        allocation = widget.get_allocation()
+        width = allocation.width
+        height = allocation.height
+        
+        if width <= 0 or height <= 0:
+            return False
+        
+        # Get disk info
+        info = self.disk_stats[self.selected_disk]
+        used_percent = info['percent'] / 100
+        free_percent = 1 - used_percent
+        
+        # Calculate center and radius
+        center_x = width / 2
+        center_y = height / 2
+        radius = min(width, height) / 2 - 20
+        
+        # Background
+        cr.set_source_rgb(1.0, 1.0, 1.0)
+        cr.rectangle(0, 0, width, height)
+        cr.fill()
+        
+        # Draw used space
+        cr.set_source_rgb(0.13, 0.59, 0.95)
+        cr.move_to(center_x, center_y)
+        cr.arc(center_x, center_y, radius, -math.pi/2, -math.pi/2 + 2*math.pi*used_percent)
+        cr.close_path()
+        cr.fill()
+        
+        # Draw free space
+        cr.set_source_rgb(0.8, 0.8, 0.8)
+        cr.move_to(center_x, center_y)
+        cr.arc(center_x, center_y, radius, -math.pi/2 + 2*math.pi*used_percent, 3*math.pi/2)
+        cr.close_path()
+        cr.fill()
+        
+        # Draw border
+        cr.set_source_rgb(0.5, 0.5, 0.5)
+        cr.set_line_width(2)
+        cr.arc(center_x, center_y, radius, 0, 2*math.pi)
+        cr.stroke()
+        
+        # Draw legend
+        legend_y = height - 40
+        
+        # Used space legend
+        cr.set_source_rgb(0.13, 0.59, 0.95)
+        cr.rectangle(20, legend_y, 15, 15)
+        cr.fill()
+        cr.set_source_rgb(0, 0, 0)
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        cr.set_font_size(12)
+        cr.move_to(40, legend_y + 12)
+        cr.show_text(f"Used ({info['percent']:.1f}%)")
+        
+        # Free space legend
+        cr.set_source_rgb(0.8, 0.8, 0.8)
+        cr.rectangle(150, legend_y, 15, 15)
+        cr.fill()
+        cr.set_source_rgb(0, 0, 0)
+        cr.move_to(170, legend_y + 12)
+        cr.show_text(f"Free ({100-info['percent']:.1f}%)")
+        
+        return False
+    
+    def on_disk_io_chart_draw(self, widget, cr):
+        """Draw disk I/O chart"""
+        if not self.selected_disk:
+            return False
+            
+        allocation = widget.get_allocation()
+        width = allocation.width
+        height = allocation.height
+        
+        if width <= 0 or height <= 0:
+            return False
+        
+        # Background
+        cr.set_source_rgb(1.0, 1.0, 1.0)
+        cr.rectangle(0, 0, width, height)
+        cr.fill()
+        
+        # Get device name without /dev/ prefix
+        device_name = self.selected_disk.replace('/dev/', '')
+        
+        # Try to find I/O stats for this device or its base device
+        io_device = None
+        if device_name in self.disk_io_history:
+            io_device = device_name
+        else:
+            # Try base device (e.g., sda for sda1)
+            base_device = ''.join([c for c in device_name if not c.isdigit()])
+            if base_device in self.disk_io_history:
+                io_device = base_device
+        
+        if not io_device or io_device not in self.disk_io_history:
+            # No data message
+            cr.set_source_rgb(0.5, 0.5, 0.5)
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+            cr.set_font_size(12)
+            cr.move_to(width/2 - 60, height/2)
+            cr.show_text("Gathering I/O data...")
+            return False
+        
+        io_data = self.disk_io_history[io_device]
+        
+        # Draw grid
+        cr.set_source_rgba(0.8, 0.8, 0.8, 0.5)
+        cr.set_line_width(0.5)
+        
+        # Horizontal grid lines
+        for i in range(5):
+            y = int(height * i / 4)
+            cr.move_to(0, y)
+            cr.line_to(width, y)
+        cr.stroke()
+        
+        # Find max value for scaling
+        max_val = max(
+            max(io_data['read']) if io_data['read'] else 1,
+            max(io_data['write']) if io_data['write'] else 1
+        )
+        max_val = max(max_val, 1)  # Avoid division by zero
+        
+        # Draw read line
+        if len(io_data['read']) > 1:
+            cr.set_source_rgb(0.13, 0.59, 0.95)
+            cr.set_line_width(2)
+            point_spacing = width / max(1, len(io_data['read']) - 1)
+            
+            for i, value in enumerate(io_data['read']):
+                x = i * point_spacing
+                y = height - (value / max_val * height * 0.9)
+                if i == 0:
+                    cr.move_to(x, y)
+                else:
+                    cr.line_to(x, y)
+            cr.stroke()
+        
+        # Draw write line
+        if len(io_data['write']) > 1:
+            cr.set_source_rgb(0.96, 0.26, 0.21)
+            cr.set_line_width(2)
+            point_spacing = width / max(1, len(io_data['write']) - 1)
+            
+            for i, value in enumerate(io_data['write']):
+                x = i * point_spacing
+                y = height - (value / max_val * height * 0.9)
+                if i == 0:
+                    cr.move_to(x, y)
+                else:
+                    cr.line_to(x, y)
+            cr.stroke()
+        
+        # Draw legend
+        cr.set_source_rgb(0.13, 0.59, 0.95)
+        cr.rectangle(10, 10, 15, 10)
+        cr.fill()
+        cr.set_source_rgb(0, 0, 0)
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        cr.set_font_size(11)
+        cr.move_to(30, 19)
+        cr.show_text("Read")
+        
+        cr.set_source_rgb(0.96, 0.26, 0.21)
+        cr.rectangle(80, 10, 15, 10)
+        cr.fill()
+        cr.set_source_rgb(0, 0, 0)
+        cr.move_to(100, 19)
+        cr.show_text("Write")
+        
+        # Draw border
+        cr.set_source_rgb(0.7, 0.7, 0.7)
+        cr.set_line_width(1)
+        cr.rectangle(0.5, 0.5, width - 1, height - 1)
+        cr.stroke()
+        
+        return False
 
 if __name__ == "__main__":
     # Check if psutil is installed
